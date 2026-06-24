@@ -1,51 +1,117 @@
-Working in a command line environment is recommended for ease of use with git and dvc. If on Windows, WSL1 or 2 is recommended.
+# Census Income Classification — FastAPI on a Cloud Application Platform
 
-# Environment Set up
-* **Option 1: Using pip and venv (Recommended)**
-    * Ensure you have Python 3.13 installed
-    * Create virtual environment: `python3.13 -m venv .venv`
-    * Activate environment: `source .venv/bin/activate` (On Windows: `.venv\Scripts\activate`)
-    * Install dependencies: `pip install -r starter/requirements.txt`
+## Project Overview
 
-* **Option 2: Using conda**
-    * Download and install conda if you don't have it already.
-    * conda create -n [envname] "python=3.13" scikit-learn pandas numpy pytest jupyter jupyterlab fastapi uvicorn pydantic httpx matplotlib seaborn -c conda-forge
-    * Install git either through conda ("conda install git") or through your CLI, e.g. sudo apt-get git.
+This project trains a machine learning model to predict whether a person's annual income exceeds $50,000 based on 1994 U.S. Census demographic and employment data, then deploys that model behind a FastAPI REST API. The repository implements the full MLOps loop required by the rubric: data cleaning, model training and persistence, unit testing, model evaluation on data slices, a model card, a FastAPI inference service, API tests, GitHub Actions CI, and continuous deployment to Render.
 
-## Repositories
-* Create a directory for the project and initialize git.
-    * As you work on the code, continually commit changes. Trained models you want to use in production must be committed to GitHub.
-* Connect your local git repo to GitHub.
-* Setup GitHub Actions on your repo. You can use one of the pre-made GitHub Actions if at a minimum it runs pytest and flake8 on push and requires both to pass without error.
-    * Make sure you set up the GitHub Action to use Python 3.13 (same version as development).
-    * Note: Add flake8 to requirements.txt if you want to use it for linting: `pip install flake8`
+## Dataset
 
-# Data
-* Download census.csv and commit it to dvc.
-* This data is messy, try to open it in pandas and see what you get.
-* To clean it, use your favorite text editor to remove all spaces.
+The data is the UCI "Census Income" (Adult) dataset (`starter/data/census.csv`), 32,561 rows with 14 features (age, workclass, fnlgt, education, education-num, marital-status, occupation, relationship, race, sex, capital-gain, capital-loss, hours-per-week, native-country) and a binary `salary` label (`<=50K` or `>50K`). The raw CSV has stray leading whitespace after every delimiter; `starter/starter/ml/data.py:clean_data()` removes it before training.
 
-# Model
-* Using the starter code, write a machine learning model that trains on the clean data and saves the model. Complete any function that has been started.
-* Write unit tests for at least 3 functions in the model code.
-* Write a function that outputs the performance of the model on slices of the data.
-    * Suggestion: for simplicity, the function can just output the performance on slices of just the categorical features.
-* Write a model card using the provided template.
+## Installation
 
-# API Creation
-*  Create a RESTful API using FastAPI this must implement:
-    * GET on the root giving a welcome message.
-    * POST that does model inference.
-    * Type hinting must be used.
-    * Use a Pydantic model to ingest the body from POST. This model should contain an example.
-   	 * Hint: the data has names with hyphens and Python does not allow those as variable names. Do not modify the column names in the csv and instead use the functionality of FastAPI/Pydantic/etc to deal with this.
-* Write 3 unit tests to test the API (one for the GET and two for POST, one that tests each prediction).
+```bash
+# Clone the repository
+git clone https://github.com/adebowalep/census-income-fastapi-mlops.git
+cd census-income-fastapi-mlops/starter
 
-# API Deployment
-* Create a free Heroku account (for the next steps you can either use the web GUI or download the Heroku CLI).
-* Create a new app and have it deployed from your GitHub repository.
-    * Enable automatic deployments that only deploy if your continuous integration passes.
-    * Hint: think about how paths will differ in your local environment vs. on Heroku.
-    * Hint: development in Python is fast! But how fast you can iterate slows down if you rely on your CI/CD to fail before fixing an issue. I like to run flake8 locally before I commit changes.
-    * Note: Install flake8 separately if needed: `pip install flake8`
-* Write a script that uses the requests module to do one POST on your live API.
+# Create and activate a virtual environment (Python 3.13)
+python3.13 -m venv .venv
+source .venv/bin/activate   # On Windows: .venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+## Training
+
+Train the model, persist the artifacts, and generate the slice metrics report:
+
+```bash
+cd starter
+python -m starter.train_model
+```
+
+This loads and cleans `data/census.csv`, performs an 80/20 stratified train/test split, trains a `RandomForestClassifier`, prints overall precision/recall/F1 on the test set, saves `model/model.pkl`, `model/encoder.pkl`, and `model/lb.pkl` with `joblib`, and writes per-category slice metrics to `slice_output.txt`.
+
+## Running FastAPI
+
+```bash
+cd starter
+uvicorn main:app --reload
+```
+
+The interactive API docs (with the request example) are available at `http://127.0.0.1:8000/docs`.
+
+* `GET /` returns a welcome message.
+* `POST /predict` accepts a single census record (original hyphenated column names, e.g. `marital-status`, via Pydantic field aliases) and returns the predicted salary category.
+
+## Running Tests
+
+```bash
+cd starter
+pytest -q
+flake8 .
+```
+
+There are 11 tests total: 7 unit tests for the data/model functions in `tests/test_ml.py` and 4 API tests in `tests/test_main.py` (GET, a `<=50K` prediction, a `>50K` prediction, and an invalid-payload case). You can also run the rubric's heuristic sanity checker:
+
+```bash
+python sanitycheck.py
+# when prompted, enter: tests/test_main.py
+```
+
+## GitHub Actions
+
+`.github/workflows/python-app.yml` runs on every push and pull request to `main`/`master`. It installs dependencies, runs `flake8`, trains the model so the artifacts exist for the API tests, and runs `pytest`, all under Python 3.13 (matching local development). Both flake8 and pytest must pass without error.
+
+## Deployment
+
+The app is deployed to [Render](https://render.com) as a Web Service, configured via `render.yaml` at the repo root:
+
+1. Push this repository to GitHub.
+2. In Render, choose **New > Web Service**, connect the GitHub repo, and let Render detect `render.yaml` (or configure manually: root directory `starter`, build command `pip install -r requirements.txt`, start command `uvicorn main:app --host 0.0.0.0 --port $PORT`).
+3. Enable **Auto-Deploy** so Render redeploys automatically on every push to the default branch, after GitHub Actions CI has passed.
+
+## API Usage
+
+Example request to the live API with `requests`:
+
+```bash
+curl -X POST "https://<your-render-app>.onrender.com/predict" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "age": 46, "workclass": "Private", "fnlgt": 188386,
+        "education": "Doctorate", "education-num": 16,
+        "marital-status": "Married-civ-spouse", "occupation": "Exec-managerial",
+        "relationship": "Husband", "race": "White", "sex": "Male",
+        "capital-gain": 15024, "capital-loss": 0, "hours-per-week": 60,
+        "native-country": "United-States"
+      }'
+```
+
+`starter/live_post.py` does the same thing via the `requests` library and prints the status code and prediction:
+
+```bash
+python starter/live_post.py https://<your-render-app>.onrender.com/predict
+```
+
+## Model Card
+
+See [`starter/model_card.md`](starter/model_card.md) for model details, intended use, training/evaluation data, metrics (precision 0.8083 / recall 0.5727 / F1 0.6704 on the held-out test set), ethical considerations, and caveats/recommendations.
+
+## Screenshots Required
+
+The following screenshots must be captured after pushing to GitHub and deploying to Render, and committed to `starter/screenshots/`:
+
+| Screenshot | What it shows |
+|---|---|
+| `continuous_integration.png` | The GitHub Actions workflow run passing (flake8 + pytest green). |
+| `example.png` | The `/docs` Swagger UI showing the `/predict` request body example. |
+| `continuous_deployment.png` | The Render dashboard showing Auto-Deploy enabled. |
+| `live_get.png` | A browser showing the JSON response of `GET /` on the live Render URL. |
+| `live_post.png` | The terminal output of `python starter/live_post.py <live-url>/predict`. |
+
+## Repository Link
+
+https://github.com/adebowalep/census-income-fastapi-mlops
