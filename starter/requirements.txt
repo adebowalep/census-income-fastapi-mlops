@@ -8,7 +8,7 @@ uvicorn[standard]==0.36.0
 pydantic==2.11.9
 
 # Testing and linting
-pytest==8.4.2
+pytest==9.1.1
 pytest-asyncio==1.2.0
 flake8==7.1.1
 
